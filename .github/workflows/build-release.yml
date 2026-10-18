@@ -11,6 +11,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      ANDROID_SDK_ROOT: /home/runner/android-sdk
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -28,14 +30,27 @@ jobs:
         with:
           gradle-version: '8.0'
 
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
+      # 不依赖第三方 setup-android action，直接用官方 cmdline-tools 装 SDK。
+      - name: Install Android SDK
+        run: |
+          set -x
+          mkdir -p "$ANDROID_SDK_ROOT"
+          cd "$ANDROID_SDK_ROOT"
+          if [ ! -d cmdline-tools/latest ]; then
+            curl -sSL -o cmdtools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+            unzip -q cmdtools.zip
+            mkdir -p cmdline-tools/latest
+            mv cmdline-tools/bin cmdline-tools/lib cmdline-tools/NOTICE.txt cmdline-tools/source.properties cmdline-tools/latest/ 2>/dev/null || true
+          fi
+          yes | cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
+          cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          echo "$ANDROID_SDK_ROOT" >> "$GITHUB_PATH"
 
       - name: Install NDK and CMake
         run: |
-          yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager "ndk;26.3.11579264" "cmake;3.22.1"
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/26.3.11579264" >> "$GITHUB_ENV"
+          yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "ndk;26.3.11579264" "cmake;3.22.1"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.3.11579264" >> "$GITHUB_ENV"
 
       - name: Cache Gradle
         uses: actions/cache@v4
