@@ -49,8 +49,10 @@ jobs:
       - name: Install NDK and CMake
         run: |
           yes | "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
-          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "ndk;26.3.11579264" "cmake;3.22.1"
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.3.11579264" >> "$GITHUB_ENV"
+          # AGP 8.0.2 默认 NDK 版本是 25.1.8937393，未装会触发自动下载并失败；
+          # 26.3 一并装上作为备用。同时在 build.gradle 里钉死 ndkVersion。
+          "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "ndk;25.1.8937393" "ndk;26.3.11579264" "cmake;3.22.1"
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/25.1.8937393" >> "$GITHUB_ENV"
 
       - name: Cache Gradle
         uses: actions/cache@v4
@@ -64,9 +66,20 @@ jobs:
 
       - name: Build Release APK
         run: |
-          gradle assembleRelease --no-daemon --stacktrace --info 2>&1 | tee /tmp/gradle-build.log
-          # tee 会吞掉 gradle 的退出码，用 PIPESTATUS 还原
-          exit ${PIPESTATUS[0]}
+          gradle assembleRelease --no-daemon --stacktrace --info --warning-mode all 2>&1 | tee /tmp/gradle-build.log
+          rc=${PIPESTATUS[0]}
+          echo "::group::gradle exit code"
+          echo "rc=$rc"
+          echo "::endgroup::"
+          if [ "$rc" -ne 0 ]; then
+            echo "::group::last 200 lines of gradle log"
+            tail -200 /tmp/gradle-build.log || true
+            echo "::endgroup::"
+            echo "::group::gradle error lines"
+            grep -nE 'FAILURE|What went wrong|Caused by|error:|ERROR:|Could not|not found|Unsupported|Task .* FAILED' /tmp/gradle-build.log | head -80 || true
+            echo "::endgroup::"
+          fi
+          exit $rc
 
       - name: Verify Xposed entry survived R8
         # 本次修复的核心回归校验：R8 必须保留 XposedEntry 与全部 hook 类，
@@ -79,15 +92,28 @@ jobs:
           fi
           echo "=== APK size ==="
           ls -l "$APK"
+          echo "=== dex files ==="
+          unzip -l "$APK" | grep -E 'classes.*\.dex' || true
+          # 用 grep -a 而不是 strings：CI 镜像可能没有 binutils
+          dexdump() { unzip -p "$APK" "$1" 2>/dev/null | grep -a -o -E "$2" | sort -u; }
           echo "=== entry class check ==="
-          if unzip -p "$APK" classes.dex 2>/dev/null | strings | grep -q "io/github/xalsace/qqbypass/XposedEntry"; then
-            echo "OK: XposedEntry survived R8"
-          else
+          for d in $(unzip -l "$APK" | grep -o -E 'classes[0-9]*\.dex' || echo classes.dex); do
+            if dexdump "$d" 'io/github/xalsace/qqbypass/XposedEntry' | grep -q .; then
+              echo "OK: XposedEntry survived R8 (in $d)"
+              found=1
+              break
+            fi
+          done
+          if [ "${found:-0}" != "1" ]; then
             echo "::error::XposedEntry was stripped by R8, proguard rules not effective"
             exit 1
           fi
           for c in UnifiedHookCoordinator NetworkReportHook RootDetectionHook XposedDetectionHook DeviceInfoHook DebugDetectionHook RuntimeMonitorHook QQ950PatchHook; do
-            if unzip -p "$APK" classes.dex 2>/dev/null | strings | grep -q "io/github/xalsace/qqbypass/hooks/$c"; then
+            ok=0
+            for d in $(unzip -l "$APK" | grep -o -E 'classes[0-9]*\.dex' || echo classes.dex); do
+              if dexdump "$d" "io/github/xalsace/qqbypass/hooks/$c" | grep -q .; then ok=1; break; fi
+            done
+            if [ "$ok" = "1" ]; then
               echo "OK: $c"
             else
               echo "::error::hook class stripped: $c"
@@ -96,6 +122,13 @@ jobs:
           done
           echo "=== assets/xposed_init ==="
           unzip -p "$APK" assets/xposed_init
+          echo "=== manifest xposed meta-data ==="
+          if unzip -p "$APK" AndroidManifest.xml 2>/dev/null | grep -a -q 'xposedmodule'; then
+            echo "OK: manifest contains xposedmodule"
+          else
+            echo "::warning::manifest may be missing xposedmodule meta-data"
+          fi
+          echo "=== ALL CHECKS PASSED ==="
 
       - name: Upload build log
         if: always()

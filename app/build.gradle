@@ -6,6 +6,10 @@ android {
     namespace 'io.github.xalsace.qqbypass'
     compileSdk 34
 
+    // 显式钉死 NDK 版本：AGP 8.0.2 默认 25.1.8937393，
+    // 不写死时若环境里装了别的版本，AGP 会触发自动下载并在 CI 上失败。
+    ndkVersion "25.1.8937393"
+
     // 签名配置从 keystore.properties 读取（该文件已 gitignore，密钥不进版本库）。
     // 复制 keystore.properties.example 为 keystore.properties 并填入自己的密钥即可。
     signingConfigs {
