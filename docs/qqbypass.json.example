@@ -1,0 +1,29 @@
+{
+  "_comment": "放到 /sdcard/Download/qqbypass.json 或 /data/local/tmp/qqbypass.json。改完必须重启 QQ 才生效（Xposed 模块的固有约束，配置只在进程启动时读一次）。这个文件不存在时全部走默认值：所有模块开、不伪造指纹、不打印冗余日志、不开 native。",
+
+  "verbose": false,
+  "_verbose_comment": "true = 打印每条 hook 的命中日志。排查时开，日常关（QQ 每次启动都刷日志）。",
+
+  "nativeHooks": false,
+  "_nativeHooks_comment": "默认关。native 层（libc/libturingxq 等的 PLT hook）没有在真机上验证过，开了一个加载失败就可能影响 QQ 启动。要试的话单独开这一项观察。",
+
+  "spoofFingerprint": false,
+  "_spoofFingerprint_comment": "默认关，且建议保持关闭。伪造设备指纹是本模块最容易被识别的一层；更关键的是：XSpace 双开下如果 u0 和 u999 拿到同一套假指纹，服务端会判定「同一设备绑定两个账号」，反而放大风控。开启前先确认 fingerprint 里给每个 user 配了不同的 seed。",
+
+  "modules": {
+    "_comment": "写在这里的模块按值开关；没写的模块默认启用。id 取自 HookRegistry.createDefault()。",
+    "network_report": true,
+    "root_detection": true,
+    "xposed_detection": true,
+    "device_info": true,
+    "debug_detection": true,
+    "runtime_monitor": true,
+    "qq950_patch": true
+  },
+
+  "fingerprint": {
+    "_comment": "按 Android userId 分桶的指纹种子。key 是 userId（0 = 机主，999 = XSpace 双开），value 是任意字符串。不同 user 必须给不同的 seed，否则失去分桶意义。某个 user 没配则由设备构建属性自动派生。",
+    "0": "my-seed-for-owner",
+    "999": "different-seed-for-xspace"
+  }
+}

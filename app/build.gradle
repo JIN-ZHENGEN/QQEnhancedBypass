@@ -73,6 +73,20 @@ android {
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8
     }
+
+    // ------------------------------------------------------------------
+    // 单元测试（路线图第 5 项）
+    //
+    // 开启 returnDefaultValues：默认的 android.jar 里所有方法体都是
+    // `throw new RuntimeException("Stub!")`，一调用就炸。本模块的
+    // HookRegistry / Fingerprint / ModuleConfig 都会走 Log、System.currentTimeMillis
+    // 这类 android API，不打开这个开关，纯 JVM 单测根本跑不起来。
+    // 代价：android 方法在单测里返回默认值（Log.i 返回 0），这是可接受的 ——
+    // 被测的是我们自己的逻辑，不是 android 的行为。
+    // ------------------------------------------------------------------
+    testOptions {
+        unitTests.returnDefaultValues = true
+    }
 }
 
 dependencies {
@@ -83,4 +97,14 @@ dependencies {
 
     // ByteHook - 字节跳动 PLT hook 框架（预编译 AAR，含 prefab 供 CMake 使用）
     implementation 'com.bytedance:bytehook:1.0.2'
+
+    // JUnit 4。scope 是 testImplementation：Xposed 模块没有 instrumentation，
+    // 也不打算在真机上跑这些测试 —— 要验的是纯逻辑，跑在 JVM 上更快也更稳。
+    testImplementation 'junit:junit:4.13.2'
+
+    // Xposed API 在 main 里是 compileOnly（运行时由 LSPosed 框架注入，不打包进 APK），
+    // 但 compileOnly 不会传递到 test classpath。HookRegistry 的方法签名里带
+    // XC_LoadPackage.LoadPackageParam，测试要构造调用就得能引用这个类型，
+    // 所以这里以 testImplementation 再声明一次（仅测试期可见，不影响 APK 体积）。
+    testImplementation 'de.robv.android.xposed:api:82'
 }
