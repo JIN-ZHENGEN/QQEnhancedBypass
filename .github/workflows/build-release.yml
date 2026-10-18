@@ -63,7 +63,10 @@ jobs:
             ${{ runner.os }}-gradle-
 
       - name: Build Release APK
-        run: gradle assembleRelease --no-daemon --stacktrace
+        run: |
+          gradle assembleRelease --no-daemon --stacktrace --info 2>&1 | tee /tmp/gradle-build.log
+          # tee 会吞掉 gradle 的退出码，用 PIPESTATUS 还原
+          exit ${PIPESTATUS[0]}
 
       - name: Verify Xposed entry survived R8
         # 本次修复的核心回归校验：R8 必须保留 XposedEntry 与全部 hook 类，
@@ -94,7 +97,16 @@ jobs:
           echo "=== assets/xposed_init ==="
           unzip -p "$APK" assets/xposed_init
 
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gradle-build-log
+          path: /tmp/gradle-build.log
+          if-no-files-found: warn
+
       - name: Upload APK artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: QQEnhancedBypass-release
