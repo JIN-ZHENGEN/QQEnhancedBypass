@@ -12,6 +12,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     env:
+      # runner 镜像预置了 ANDROID_HOME=/usr/local/lib/android/sdk。
+      # AGP 会校验环境变量/local.properties/sdk.dir 是否指向同一路径，
+      # 只改其中一个会直接报 "different paths to the SDK" 并拒绝配置。
+      # 因此两个变量必须显式指向同一目录。
+      ANDROID_HOME: /home/runner/android-sdk
       ANDROID_SDK_ROOT: /home/runner/android-sdk
     steps:
       - name: Checkout
@@ -34,8 +39,10 @@ jobs:
       - name: Install Android SDK
         run: |
           set -x
-          mkdir -p "$ANDROID_SDK_ROOT"
-          cd "$ANDROID_SDK_ROOT"
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          mkdir -p "$ANDROID_HOME"
+          cd "$ANDROID_HOME"
           if [ ! -d cmdline-tools/latest ]; then
             curl -sSL -o cmdtools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
             unzip -q cmdtools.zip
@@ -44,7 +51,8 @@ jobs:
           fi
           yes | cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
           cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
-          echo "$ANDROID_SDK_ROOT" >> "$GITHUB_PATH"
+          # 自检：确认 SDK 真的装好了，避免后续步骤拿到空目录才报错
+          ls -l "$ANDROID_HOME/platforms" "$ANDROID_HOME/build-tools"
 
       - name: Install NDK and CMake
         run: |
