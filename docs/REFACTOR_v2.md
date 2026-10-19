@@ -130,21 +130,42 @@ NEEDED: libbytehook.so, liblog.so, libandroid.so, libc++_shared.so
 需要显式 `--rtlib=compiler-rt` + `-resource-dir` 指向 NDK 的
 `lib64/clang/14.0.6`，让链接器找到 `libclang_rt.builtins-aarch64-android.a`。
 
-**运行时 Switch 已打开**：native 现在默认启用（`nativeHooks: true`）。
-理由有三条：
-1. CI 是 x86_64 原生环境，CMake 路径通畅，`libnative-bypass.so` 会随 APK 打包；
-2. `UnifiedHookCoordinator` 在 `.so` 缺失时走纯 Java 降级路径，不会崩；
-3. `ModuleConfigTest.nativeCanBeDisabledByConfig` 保证真机上一键关闭的退路有效。
+**再再更正（真机实测，v1.0.9）——默认值已改回 `false`**：
+v1.0.8 曾短暂把默认翻成 `true`，真机装上后**立即被判定异常**。根因不是配置，
+而是 ByteHook 的机制：它是 **GOT/PLT hook**，而 `bytehook_hook_all` 会改写
+**所有已加载库**的 GOT 表项 —— 包括 `libturingxq.so` / `libturingmfa.so` /
+`libQSec.so` / `libMSFKernel.so` 这四个腾讯反欺诈库自身。它们的自检逻辑正是
+扫描自身 GOT 里有没有指向库外地址的项（`send` 本该指向 `libc.so`，改成了
+跳板），一查即中。
 
-**退路**：真机出问题就写配置，重启 QQ 即回到纯 Java：
-```json
-{ "nativeHooks": false }
-```
+Java 层那 64 个 hook 全是 ART 方法级（改 entry point），不走 GOT，所以扫不到 ——
+这就是「native 关着一直没事，一开就出事」的原因。
 
-**重要前提**：此前那些 `-unsigned.apk` / `-signed.apk` 里 **`.so` 数量为 0** ——
-它们是在你这台 x86_64-SDK 的 proot 里构建的，NDK 工具链跑不起来，native
-从来就没被打包进去。所以「native 无效」此前是双重原因：既默认关闭，
-包里也根本没有库。后者只有在 CI 出包时才真正成立。
+被 hook 的全局符号清单（`hook_all` = 全进程）：
+
+| 文件 | 符号 |
+|---|---|
+| `hook_libc.cpp` | `fopen` `fgets` `readlink` `access` |
+| `hook_libfekit.cpp` | `system` `popen` |
+| `hook_libturingxq.cpp` | `send` `sendto` |
+
+另有几处放大问题：`hook_libqsec.cpp` 把任何含 `hook` 子串的符号一律返回
+`nullptr`（会误伤 QQ 自身的合法符号）；`hook_libturingxq.cpp` 的 `fake_send`
+把风控上报吞掉并伪装发送成功（服务端静默本身即是风控画像）；
+`send` 被 turingxq（全局）和 turingmfa（单库）**hook 了两次**，嵌套跳板纯增风险。
+
+**当前默认值**：`false`。`ModuleConfig.defaults()` / `fromJson()` 初值 /
+`Json.asBoolean` 回退值三处已同步，`defaultsAreSafe` 与 `emptyObjectIsDefaults`
+两条断言钉死新值，并新增 `nativeCanBeEnabledByConfig` 保证开关双向有效。
+
+**开启方式（后果自负）**：在 `qqbypass.json` 里写 `{"nativeHooks": true}`，
+重启 QQ。日志会打 `[native] enabled=true`。
+
+**未来要安全启用 native 的前提**：删掉全部 `hook_all`，只保留限定调用方的
+`bytehook_hook_single`（目前唯一相对安全的是 `hook_libfekit.cpp` 里那条
+只拦 `libfekit.so` 的 `strstr`）；`hook_libmsfkernel.cpp` 只记录后放行、
+零收益却改了 libMSFKernel 的 GOT，`hook_libmsf.cpp` 源码自述「默认不做任何 hook」，
+这两个应当直接移除。
 
 **仍未变的**：构建已验证 ≠ 运行时已验证。ByteHook 的 PLT hook 本身是可检测面，
 native 层出错是 native crash 而非 Java 异常（try/catch 抓不到信号级崩溃）。
@@ -152,7 +173,8 @@ native 层出错是 native crash 而非 Java 异常（try/catch 抓不到信号�
 
 ```
 [native] enabled=true   (库加载成功，保护等级 80%)
-[native] enabled=false  (.so 缺失，回落 Java only 30%)
+[native] enabled=false  (.so 缺失或配置关闭，回落 Java only 30%)
+[disabled by config]    (nativeHooks=false，库压根不加载)
 ```
 
 ### 4. 签名校验绕过（实验性）❌ 未做

@@ -20,42 +20,52 @@ import static org.junit.Assert.assertTrue;
 public class ModuleConfigTest {
 
     /**
- * 全默认：所有模块开、不伪造、安静、native 开。
- *
- * native 这里断言为 true 是有意的，它把「默认行为」钉在测试里：
- * CI 会产出 libnative-bypass.so 并打进 APK，native 应当是开箱即用的。
- * 若哪天要把默认改回关闭，必须同时改这里和 ModuleConfig.defaults()，
- * 否则测试会立刻提醒你两处不一致。
- */
-@Test
-public void defaultsAreSafe() {
-    ModuleConfig c = ModuleConfig.defaults();
-    assertTrue("未配置的模块默认启用", c.isModuleEnabled("anything"));
-    assertFalse("默认不伪造指纹", c.isSpoofFingerprintEnabled());
-    assertTrue("默认开 native（CI 已打包 libnative-bypass.so）", c.isNativeHooksEnabled());
-    assertFalse("默认不打印冗余日志", c.isVerbose());
-    assertNull(c.seedForUser(0));
-    assertNotNull(c.describe());
-}
+     * 全默认：所有模块开、不伪造、安静、native 关。
+     *
+     * native 这里断言为 false 是有意的，它把「默认行为」钉在测试里。
+     * 曾短暂改为 true（v1.0.8），真机随即被判定异常：ByteHook 的 GOT hook
+     * 改写了反欺诈库自身的 GOT 表项，而它们的自检正是扫这一项。
+     * 若哪天要重新开启，必须同时改这里和 ModuleConfig.defaults()，
+     * 否则测试会立刻提醒你两处不一致。
+     */
+    @Test
+    public void defaultsAreSafe() {
+        ModuleConfig c = ModuleConfig.defaults();
+        assertTrue("未配置的模块默认启用", c.isModuleEnabled("anything"));
+        assertFalse("默认不伪造指纹", c.isSpoofFingerprintEnabled());
+        assertFalse("默认关 native（GOT hook 会触发反欺诈库自检）", c.isNativeHooksEnabled());
+        assertFalse("默认不打印冗余日志", c.isVerbose());
+        assertNull(c.seedForUser(0));
+        assertNotNull(c.describe());
+    }
 
-/** native 可以被配置文件显式关掉 —— 真机上出问题的退路。 */
-@Test
-public void nativeCanBeDisabledByConfig() {
-    ModuleConfig c = ModuleConfig.fromJson("{\"nativeHooks\": false}");
-    assertFalse("配置显式关闭时必须真的关掉", c.isNativeHooksEnabled());
-    // 关掉 native 不应该顺手把别的默认值也影响掉
-    assertTrue(c.isModuleEnabled("root_detection"));
-    assertFalse(c.isSpoofFingerprintEnabled());
-}
+    /** native 可以被配置文件显式关掉 —— 真机上出问题的退路。 */
+    @Test
+    public void nativeCanBeDisabledByConfig() {
+        ModuleConfig c = ModuleConfig.fromJson("{\"nativeHooks\": false}");
+        assertFalse("配置显式关闭时必须真的关掉", c.isNativeHooksEnabled());
+        // 关掉 native 不应该顺手把别的默认值也影响掉
+        assertTrue(c.isModuleEnabled("root_detection"));
+        assertFalse(c.isSpoofFingerprintEnabled());
+    }
 
-/** 空 JSON 对象 = 全默认，不抛异常。 */
-@Test
-public void emptyObjectIsDefaults() {
-    ModuleConfig c = ModuleConfig.fromJson("{}");
-    assertTrue(c.isModuleEnabled("x"));
-    assertFalse(c.isSpoofFingerprintEnabled());
-    assertTrue(c.isNativeHooksEnabled());
-}
+    /** native 也可以被配置文件显式打开 —— 与上一条互为镜像，保证开关双向有效。 */
+    @Test
+    public void nativeCanBeEnabledByConfig() {
+        ModuleConfig c = ModuleConfig.fromJson("{\"nativeHooks\": true}");
+        assertTrue("配置显式开启时必须真的打开", c.isNativeHooksEnabled());
+        assertTrue(c.isModuleEnabled("root_detection"));
+        assertFalse(c.isSpoofFingerprintEnabled());
+    }
+
+    /** 空 JSON 对象 = 全默认，不抛异常。 */
+    @Test
+    public void emptyObjectIsDefaults() {
+        ModuleConfig c = ModuleConfig.fromJson("{}");
+        assertTrue(c.isModuleEnabled("x"));
+        assertFalse(c.isSpoofFingerprintEnabled());
+        assertFalse("空配置必须与 defaults() 一致（native 关）", c.isNativeHooksEnabled());
+    }
 
     /** 完全不是 JSON —— 必须回落到默认，绝不抛出。 */
     @Test

@@ -57,13 +57,14 @@ public final class ModuleConfig {
         this.spoofFingerprint = spoofFingerprint;
     }
 
-    /** 全默认：所有模块开、不伪造指纹、静默日志、native 开。 */
+    /** 全默认：所有模块开、不伪造指纹、静默日志、native 关。
+     * native 默认关的理由见 fromJson() 里的长注释（GOT hook 会触发反欺诈库自检）。 */
     public static ModuleConfig defaults() {
         return new ModuleConfig(
             Collections.<String, Boolean>emptyMap(),
             Collections.<Integer, String>emptyMap(),
             false,
-            true,
+            false,
             false);
     }
 
@@ -107,7 +108,7 @@ public final class ModuleConfig {
         Map<String, Boolean> mods = new LinkedHashMap<String, Boolean>();
         Map<Integer, String> seeds = new LinkedHashMap<Integer, String>();
         boolean verbose = false;
-        boolean nativeHooks = true;
+        boolean nativeHooks = false;
         boolean spoofFingerprint = false;
 
         Map<String, Object> root;
@@ -143,10 +144,13 @@ public final class ModuleConfig {
         }
 
         verbose = Json.asBoolean(root.get("verbose"), false);
-        // native 默认开：CI 侧 CMake 已能产出 libnative-bypass.so 并随 APK 打包，
-        // 且 UnifiedHookCoordinator 在库缺失时会走纯 Java 降级路径（不会崩）。
-        // 想在真机关掉请在 qqbypass.json 里写 "nativeHooks": false。
-        nativeHooks = Json.asBoolean(root.get("nativeHooks"), true);
+        // native 默认关：ByteHook 是 GOT/PLT hook，bytehook_hook_all 会改写 libturingxq /
+        // libturingmfa / libQSec / libMSFKernel 这些反欺诈库自身的 GOT 表项，
+        // 而它们的自检逻辑正是扫描自身 GOT 有没有指向库外地址的项 —— 一查即中。
+        // Java 层那 64 个 hook 全是 ART 方法级，不走 GOT，扫不到。
+        // 真机实测：开启 native 后客户端即被判定异常，关掉即恢复，故默认回退为关。
+        // 想在真机开启请在 qqbypass.json 里写 "nativeHooks": true（后果自负）。
+        nativeHooks = Json.asBoolean(root.get("nativeHooks"), false);
         // 伪造指纹默认关：做错有负收益（共用指纹会让服务端判定同设备多账号），
         // 且这是本模块最容易被识别的一层。默认保持真值透传。
         spoofFingerprint = Json.asBoolean(root.get("spoofFingerprint"), false);
