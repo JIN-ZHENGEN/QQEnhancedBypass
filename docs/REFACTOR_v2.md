@@ -4,7 +4,7 @@
 
 ---
 
-## 已落地（4 项，全部纯 Java）
+## 已落地（5 项）
 
 ### 1. Java 层多模块 hook 框架 ✅
 
@@ -96,22 +96,44 @@ try {
 
 ---
 
-## 未落地（2 项）
+## 未落地（1 项）
 
-### 2. native hook 支持（JNI 层）❌ 代码已有，未验证构建
+### 2. native hook 支持（JNI 层）✅ 已构建验证通过
 
 **重要更正**：早期基于 dex 反编译判断「native 已打进包但 Java 侧没接线」是**错的**。
 读源码后确认 `NativeBypass` 静态块里 `System.loadLibrary("native-bypass")` 和
 `ByteHook.init()` 俱全，`UnifiedHookCoordinator.initialize()` 读的也是
 `NativeBypass.isLibraryLoaded()`。接线本来就是完好的。
 
-真正没做的是**验证**：当前构建环境是 arm64 宿主机跑 x86_64 Android NDK，
-整条工具链（cmake / ninja / clang / lld）都要 qemu 翻译。过程中
-`ld.lld` 因 argv[0] 问题报「lld is a generic driver」，clang 内部 exec
-`clang.real` 绕过包装脚本…… 属「靠 qemu 硬凑」，即便跑通也不稳定。
+**再更正（本次）**：上一版写的「无法验证构建」也已被推翻。native 库现在**构建成功**：
 
-因此 native 在配置里**默认关闭**（`nativeHooks: false`），需要时在真机上
-单独开启观察。代码一行没删，验证留到有合适构建环境时做。
+```
+9 个源文件全部编译通过，链接产出 libnative-bypass.so (3.4 MB)
+ELF: class=64 type=SHARED machine=0xb7 (AArch64)
+导出 JNI 符号 7 个：initNativeHooksNative / isHooksInstalledNative /
+  isHookActiveNative / getHookStatusNative / getHookStatisticsNative /
+  notifyDetectionNative / JNI_OnLoad
+NEEDED: libbytehook.so, liblog.so, libandroid.so, libc++_shared.so
+```
+
+关键突破：不需要 qemu，也不需要 NDK 的 x86_64 工具链。构建脚本见仓库根目录
+`build-native.sh`。
+
+**为什么之前跑不通**：宿主是 aarch64，而 NDK 25.1 只带 `linux-x86_64` 预编译
+工具链，其 clang 是 x86_64 ELF（`3e00`），直接执行 = SIGILL (exit 132)，
+且 `binfmt_misc` 未注册（无法透明执行），只剩 qemu 一条路 —— 而 qemu 下
+`ld.lld` 报 argv[0] 问题、clang 内部 exec `clang.real` 绕过包装脚本，不可靠。
+
+**解法**：装 Ubuntu arm64 原生 clang 做交叉编译。clang 本身是交叉编译器，
+宿主架构只决定「谁跑编译器」，不影响 `--target=aarch64-linux-android24`
+的产出。唯一的坑是 **NDK 25 不带 `libgcc.a`**（改用 compiler-rt），
+需要显式 `--rtlib=compiler-rt` + `-resource-dir` 指向 NDK 的
+`lib64/clang/14.0.6`，让链接器找到 `libclang_rt.builtins-aarch64-android.a`。
+
+**仍未变的**：native 在配置里**默认关闭**（`nativeHooks: false`）。
+构建已验证 ≠ 运行时已验证 —— 真机上 native hook 是否如预期拦截
+libfekit/libturingxq 等，还没有实证。开启需评估：ByteHook 的 PLT hook
+本身是可检测面，且 native 层出错直接是 native crash 而非 Java 异常。
 
 ### 4. 签名校验绕过（实验性）❌ 未做
 
