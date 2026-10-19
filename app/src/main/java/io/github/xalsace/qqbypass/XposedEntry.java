@@ -63,17 +63,23 @@ public class XposedEntry implements IXposedHookLoadPackage {
         }
 
         // === Native 层（路线图第 2 项）===
-        // 默认关闭。native hook 未经真机验证，且由配置文件控制，
-        // 不再读 HookConfig 的编译期常量。
+        // 默认开启：CI 会产出 libnative-bypass.so 并打进 APK；
+        // UnifiedHookCoordinator 在 .so 缺失时自动走纯 Java 降级，不会崩。
+        // 要临时关掉，在 qqbypass.json 写 "nativeHooks": false 后重启 QQ。
         boolean nativeEnabled = cfg.isNativeHooksEnabled();
         if (nativeEnabled) {
             try {
                 UnifiedHookCoordinator.initialize(lpparam);
             } catch (Throwable t) {
+                // 这里抓不到 native crash（那是信号级的），只能抓 Java 侧异常。
+                // 所以下面这条 [native] 日志是判断 library load 是否成功的唯一依据。
                 logError("UnifiedHookCoordinator init failed", t);
             }
+            // loadLibrary 是否成功，直接决定了保护等级是 80% 还是 30%
+            log("[native] enabled=" + io.github.xalsace.qqbypass.NativeBypass.isLibraryLoaded()
+                + " (true=+so+loaded, false=lib missing, falling back to Java only)");
         } else {
-            log("[native] disabled by config (default off - untested on device)");
+            log("[native] disabled by config (nativeHooks=false in qqbypass.json)");
         }
 
         // === Java 层多模块执行（路线图第 1 项）===

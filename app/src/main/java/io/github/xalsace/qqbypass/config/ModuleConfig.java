@@ -57,13 +57,13 @@ public final class ModuleConfig {
         this.spoofFingerprint = spoofFingerprint;
     }
 
-    /** 全默认：所有模块开、不伪造指纹、静默日志、不开 native。 */
+    /** 全默认：所有模块开、不伪造指纹、静默日志、native 开。 */
     public static ModuleConfig defaults() {
         return new ModuleConfig(
             Collections.<String, Boolean>emptyMap(),
             Collections.<Integer, String>emptyMap(),
             false,
-            false,
+            true,
             false);
     }
 
@@ -107,7 +107,7 @@ public final class ModuleConfig {
         Map<String, Boolean> mods = new LinkedHashMap<String, Boolean>();
         Map<Integer, String> seeds = new LinkedHashMap<Integer, String>();
         boolean verbose = false;
-        boolean nativeHooks = false;
+        boolean nativeHooks = true;
         boolean spoofFingerprint = false;
 
         Map<String, Object> root;
@@ -143,9 +143,10 @@ public final class ModuleConfig {
         }
 
         verbose = Json.asBoolean(root.get("verbose"), false);
-        // native 默认关：它没有在真机上被验证过（见路线图第 2 项），
-        // 默认开启会把一个未验证的风险带进每一次启动。
-        nativeHooks = Json.asBoolean(root.get("nativeHooks"), false);
+        // native 默认开：CI 侧 CMake 已能产出 libnative-bypass.so 并随 APK 打包，
+        // 且 UnifiedHookCoordinator 在库缺失时会走纯 Java 降级路径（不会崩）。
+        // 想在真机关掉请在 qqbypass.json 里写 "nativeHooks": false。
+        nativeHooks = Json.asBoolean(root.get("nativeHooks"), true);
         // 伪造指纹默认关：做错有负收益（共用指纹会让服务端判定同设备多账号），
         // 且这是本模块最容易被识别的一层。默认保持真值透传。
         spoofFingerprint = Json.asBoolean(root.get("spoofFingerprint"), false);

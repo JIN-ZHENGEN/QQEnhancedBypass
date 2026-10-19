@@ -130,10 +130,30 @@ NEEDED: libbytehook.so, liblog.so, libandroid.so, libc++_shared.so
 需要显式 `--rtlib=compiler-rt` + `-resource-dir` 指向 NDK 的
 `lib64/clang/14.0.6`，让链接器找到 `libclang_rt.builtins-aarch64-android.a`。
 
-**仍未变的**：native 在配置里**默认关闭**（`nativeHooks: false`）。
-构建已验证 ≠ 运行时已验证 —— 真机上 native hook 是否如预期拦截
-libfekit/libturingxq 等，还没有实证。开启需评估：ByteHook 的 PLT hook
-本身是可检测面，且 native 层出错直接是 native crash 而非 Java 异常。
+**运行时 Switch 已打开**：native 现在默认启用（`nativeHooks: true`）。
+理由有三条：
+1. CI 是 x86_64 原生环境，CMake 路径通畅，`libnative-bypass.so` 会随 APK 打包；
+2. `UnifiedHookCoordinator` 在 `.so` 缺失时走纯 Java 降级路径，不会崩；
+3. `ModuleConfigTest.nativeCanBeDisabledByConfig` 保证真机上一键关闭的退路有效。
+
+**退路**：真机出问题就写配置，重启 QQ 即回到纯 Java：
+```json
+{ "nativeHooks": false }
+```
+
+**重要前提**：此前那些 `-unsigned.apk` / `-signed.apk` 里 **`.so` 数量为 0** ——
+它们是在你这台 x86_64-SDK 的 proot 里构建的，NDK 工具链跑不起来，native
+从来就没被打包进去。所以「native 无效」此前是双重原因：既默认关闭，
+包里也根本没有库。后者只有在 CI 出包时才真正成立。
+
+**仍未变的**：构建已验证 ≠ 运行时已验证。ByteHook 的 PLT hook 本身是可检测面，
+native 层出错是 native crash 而非 Java 异常（try/catch 抓不到信号级崩溃）。
+判断依据看 logcat 里这条：
+
+```
+[native] enabled=true   (库加载成功，保护等级 80%)
+[native] enabled=false  (.so 缺失，回落 Java only 30%)
+```
 
 ### 4. 签名校验绕过（实验性）❌ 未做
 

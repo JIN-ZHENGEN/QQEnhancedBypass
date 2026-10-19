@@ -220,6 +220,36 @@ jobs:
             exit 1
           fi
 
+      - name: Verify native libs are packaged
+        # native hook 现已默认开启，所以 libnative-bypass.so 必须真的在包里。
+        # 这个检查至关重要：externalNativeBuild 配了不代表产出成功 ——
+        # 之前本地 proot 环境（x86_64 SDK on aarch64 host）构建出的 APK 里
+        # .so 数量就是 0，而 assembleRelease 照样成功、照样通过所有其他检查。
+        # 没有这一步，native 会静默降级成「只有 Java 层」，且毫无线索。
+        run: |
+          set -e
+          APK=$(find app/build/outputs/apk/release -maxdepth 1 -name '*.apk' -printf '%T@ %p\n' | sort -rn | head -1 | cut -d' ' -f2-)
+          echo "APK=$APK"
+          echo "=== .so contents ==="
+          unzip -l "$APK" | grep -E 'lib/.*\.so$' || true
+          echo "=== assertions ==="
+          missing=0
+          for abi in arm64-v8a armeabi-v7a; do
+            for lib in libnative-bypass.so libbytehook.so; do
+              if unzip -l "$APK" | grep -q "lib/$abi/$lib"; then
+                echo "OK: lib/$abi/$lib"
+              else
+                echo "::error::missing lib/$abi/$lib"
+                missing=1
+              fi
+            done
+          done
+          if [ "$missing" != "0" ]; then
+            echo "::error::native libs not packaged - native hooks will silently fall back to Java only"
+            exit 1
+          fi
+          echo "OK: native libs present for both ABIs"
+
       - name: Publish to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
