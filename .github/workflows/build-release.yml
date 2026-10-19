@@ -11,6 +11,13 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      # 发布 Release 需要写 contents。GitHub 新建仓库的默认 GITHUB_TOKEN 权限是
+      # read（2023 年起），softprops/action-gh-release 会拿到 403
+      # "Resource not accessible by integration" —— 这个报错看起来像认证坏了，
+      # 实际只是缺一条权限声明。
+      contents: write
+
     env:
       # runner 镜像预置了 ANDROID_HOME=/usr/local/lib/android/sdk。
       # AGP 会校验环境变量/local.properties/sdk.dir 是否指向同一路径，
