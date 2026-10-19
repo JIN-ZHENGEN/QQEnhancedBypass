@@ -72,6 +72,44 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
+      # 仓库不提交 keystore.properties（见 .gitignore），所以 release 原本输出
+      # app-release-unsigned.apk —— 这种包装不上 Android，必须先手工补签。
+      #
+      # 这里用固定参数的 keytool 生成一把 CI 专用 debug key，让 release 也变成
+      # 已签名 APK，能直接下载安装。
+      #
+      # 为什么 distinguished name / 密码全部写死而不是随机：
+      #   keytool 每次生成的是不同私钥，签名就不匹配，用户升级 APK 时会被
+      #   「签名不一致」拒绝，必须先卸载。写死常量后，每次 CI 跑出来的 key
+      #   完全一样，前后版本可以覆盖升级。
+      #
+      # 注意：这是公开可见的 debug key（写在 workflow 里），仅用于「装得上、
+      # 能覆盖升级」，不具备任何安全意义。要用自己的私钥发布请改为：
+      #   1) 把 keystore 用 base64 存进 Secrets.KEYSTORE_BASE64
+      #   2) 本步骤改为 base64 -d 还原，并把 storePassword/keyAlias/keyPassword
+      #      也从 Secrets 取
+      - name: Generate CI signing key
+        run: |
+          set -e
+          KS="$RUNNER_TEMP/ci-signing.jks"
+          keytool -genkeypair -v \
+            -keystore "$KS" \
+            -storetype JKS \
+            -alias qqbypass_ci \
+            -keyalg RSA -keysize 2048 -validity 10950 \
+            -storepass qqbypass_ci_store \
+            -keypass qqbypass_ci_key \
+            -dname "CN=QQEnhancedBypass CI, OU=CI, O=QQEnhancedBypass, L=CI, S=CI, C=XX"
+          keytool -list -v -keystore "$KS" -storepass qqbypass_ci_store | grep -E 'Alias|Created'
+          {
+            echo "storeFile=$KS"
+            echo "storePassword=qqbypass_ci_store"
+            echo "keyAlias=qqbypass_ci"
+            echo "keyPassword=qqbypass_ci_key"
+          } > keystore.properties
+          echo "--- keystore.properties (path redacted) ---"
+          sed 's|^storeFile=.*|storeFile=<path>|' keystore.properties
+
       - name: Build Release APK
         run: |
           gradle assembleRelease --no-daemon --stacktrace --info --warning-mode all 2>&1 | tee /tmp/gradle-build.log
@@ -93,8 +131,9 @@ jobs:
         # 本次修复的核心回归校验：R8 必须保留 XposedEntry 与全部 hook 类，
         # 否则安装后必然 ClassNotFoundException，模块静默失效。
         run: |
-          # CI 上没有 keystore.properties，release 不签名，AGP 输出的是
-          # app-release-unsigned.apk；有签名时才是 app-release.apk。用 glob 兼容两者。
+          # 上一步已生成 keystore.properties，release 现在会带 CI debug 签名。
+          # 产物文件名是 app-release.apk；若签名步骤缺失才会退化为
+          # app-release-unsigned.apk。用 glob 兼容两者。
           APK=$(find app/build/outputs/apk/release -maxdepth 1 -name '*.apk' -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2-)
           if [ -z "$APK" ] || [ ! -f "$APK" ]; then
             echo "::error::APK not generated under app/build/outputs/apk/release/"
@@ -160,6 +199,27 @@ jobs:
           if-no-files-found: error
 
       # 打 v* tag 时自动发布到 Release
+      - name: Verify APK is signed
+        # 兜底：如果任何原因导致 keystore.properties 没生成，AGP 会静默产出
+        # app-release-unsigned.apk —— 它绕过了所有上面的校验，但装不上设备。
+        # 这里显式断言 APK 里存在签名块，把这个失败提前暴露出来。
+        run: |
+          set -e
+          APK=$(find app/build/outputs/apk/release -maxdepth 1 -name '*.apk' -printf '%T@ %p\n' | sort -rn | head -1 | cut -d' ' -f2-)
+          echo "APK=$APK"
+          echo "=== filename check ==="
+          case "$APK" in
+            *unsigned*) echo "::error::APK is unsigned: $APK"; exit 1 ;;
+          esac
+          echo "=== META-INF signature block check (v1) ==="
+          if unzip -l "$APK" | grep -qE 'META-INF/.*\.(RSA|DSA|EC)$'; then
+            unzip -l "$APK" | grep -E 'META-INF/.*\.(RSA|DSA|EC|SF|MF)$'
+            echo "OK: v1 signature present"
+          else
+            echo "::error::no v1 signature block found in $APK"
+            exit 1
+          fi
+
       - name: Publish to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
