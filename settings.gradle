@@ -15,6 +15,12 @@ dependencyResolutionManagement {
             url 'https://api.xposed.info/'
             allowInsecureProtocol = true
         }
+        // DexKit（org.luckypray:dexkit）。mavenCentral 上有，但国内直连
+        // 经常超时，这里挂一个阿里云镜像作为兜底 —— 顺序在 mavenCentral 之后，
+        // 前面能解析到就不会走到它。
+        maven {
+            url 'https://maven.aliyun.com/repository/public'
+        }
     }
 }
 rootProject.name = "QQEnhancedBypass"

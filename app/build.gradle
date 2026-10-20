@@ -98,6 +98,21 @@ dependencies {
     // ByteHook - 字节跳动 PLT hook 框架（预编译 AAR，含 prefab 供 CMake 使用）
     implementation 'com.bytedance:bytehook:1.0.2'
 
+    // DexKit - 按字符串常量/正则反查 dex，用于「版本无关」定位 hook 目标。
+    // 这是本次 version-agnostic 改造的核心依赖：混淆器会改类名方法名，
+    // 但方法体里引用的字符串常量基本不动（Intent action、协议命令名、
+    // 错误码都是服务端语义）。详见 resolve/TargetResolver。
+    // 注意：DexKit 内部用 kotlin + 反射读 dex，必须配 keep 规则，
+    // 否则 release 构建（minifyEnabled true）会把它裁坏。
+    implementation 'org.luckypray:dexkit:2.0.0'
+    // Kotlin stdlib 必须显式声明。DexKit 是 Kotlin 写的，它的 aar 里
+    // 并没有把 kotlin-stdlib 作为传递依赖带下来（aar 不带 pom 依赖信息），
+    // 结果是从 Java 侧调用 FindMethod/MethodMatcher 这些 API 时
+    // 报 `cannot access kotlin.jvm.functions.Function1 / kotlin.Unit`，
+    // 而且错误信息指向的是我们自己的调用行，非常难定位。
+    // 版本取 1.9.x：AGP 8.0 + Gradle 8.0 组合下 2.x 需要 Kotlin 2.0 插件支持。
+    implementation 'org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.9.23'
+
     // JUnit 4。scope 是 testImplementation：Xposed 模块没有 instrumentation，
     // 也不打算在真机上跑这些测试 —— 要验的是纯逻辑，跑在 JVM 上更快也更稳。
     testImplementation 'junit:junit:4.13.2'

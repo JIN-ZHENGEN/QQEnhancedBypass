@@ -6,11 +6,10 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
 
 import io.github.xalsace.qqbypass.XposedEntry;
 import io.github.xalsace.qqbypass.config.HookConfig;
+import io.github.xalsace.qqbypass.resolve.TieredHook;
 import io.github.xalsace.qqbypass.utils.HookUtils;
 
-import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileReader;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -26,6 +25,9 @@ import java.util.List;
  *
  * Note: Native-layer detection (libfekit.so, libturingxq.so) requires native hooks
  * This module can only handle Java-layer checks and file I/O interception
+ *
+ * version-agnostic 改造（第 4 项）：三级降级 + 删掉两个 P0 级空转 hook。
+ * 详见 hookProcMapsReading 的注释。
  */
 public class XposedDetectionHook {
 
@@ -115,49 +117,43 @@ public class XposedDetectionHook {
             });
     }
 
+    /**
+     * /proc/self/maps 读取过滤。
+     *
+     * 【P0 修复】原实现 hook 了两个东西，两个都是空转：
+     *
+     *   1. FileReader.read(char[])
+     *      回调体是空的（只有一行注释 "just log the attempt"），
+     *      连日志都没打 —— 纯占位。
+     *   2. BufferedReader.readLine()
+     *      回调里想通过 XposedHelpers.getObjectField(reader, "lock")
+     *      拿到 FileReader 再判断路径。问题是：
+     *        - java.io.BufferedReader 的字段名是 `in`，不是 `lock`
+     *          （lock 是 PushbackReader 才有），getObjectField 必然抛
+     *          NoSuchFieldException → 被 catch(Throwable) 吞掉 → 永远不命中。
+     *        - 就算拿到 FileReader，也没有 API 能从它反查文件名。
+     *     结论：这个 hook 一次都没生效过。
+     *
+     * 而且方向本身是错的：QQ 读 /proc/self/maps 走的是 **native fopen**
+     * （libturingxq.so 的 parse_libart.cpp），Java 层的 BufferedReader
+     * 根本不在那条路径上。在 Java 层拦等于拦一个不存在的调用。
+     *
+     * 现在：删掉这两个空转 hook，只保留真正有效的 File.exists() 隐藏
+     * （Xposed 安装包/产物的路径探测确实走 Java File.exists）。
+     */
     private static void hookProcMapsReading() {
-        // Hook file reading to filter /proc/self/maps content
-        HookUtils.hookMethod(FileReader.class, "read", char[].class,
-            new XC_MethodHook() {
-                @Override
-                protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                    // This is complex - would need to track file paths and filter content
-                    // Simplified implementation: just log the attempt
-                }
-            });
-
-        // Hook BufferedReader.readLine for /proc/self/maps
-        HookUtils.hookMethod(BufferedReader.class, "readLine",
-            new XC_MethodHook() {
-                @Override
-                protected void afterHookedMethod(MethodHookParam param) throws Throwable {
-                    String line = (String) param.getResult();
-                    if (line != null && containsHookLibrary(line)) {
-                        // Try to filter out hook library references
-                        // This is tricky because we need context about which file is being read
-                        Object reader = param.thisObject;
-                        // Check if this BufferedReader is reading from /proc/self/maps
-                        try {
-                            Object lock = XposedHelpers.getObjectField(reader, "lock");
-                            if (lock instanceof FileReader) {
-                                // We can't easily get the file path, so this is limited
-                                // Return null to skip this line
-                                param.setResult(null);
-                                XposedEntry.log("Filtered hook library from maps: " + line.substring(0, Math.min(50, line.length())));
-                            }
-                        } catch (Throwable ignored) {
-                        }
-                    }
-                }
-            });
-
-        // Hook File.exists for LSPosed artifacts
-        HookUtils.hookMethod(File.class, "exists",
+        // Hook File.exists for LSPosed artifacts —— 这是本方法里唯一真实有效的部分。
+        // java.io.File 是 AOSP framework 类，纯 C 档即可。
+        TieredHook.Install r = TieredHook.installFixed(
+            "java.io.File", "exists",
+            HookConfig.getClassLoader(),
             new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
                     File file = (File) param.thisObject;
+                    if (file == null) return;
                     String path = file.getAbsolutePath();
+                    if (path == null) return;
 
                     if (isXposedArtifact(path)) {
                         param.setResult(false);
@@ -165,6 +161,12 @@ public class XposedDetectionHook {
                     }
                 }
             });
+
+        if (!r.ok()) {
+            XposedEntry.log("[xposed] File.exists MISS: " + r);
+        } else {
+            XposedEntry.log("[xposed] File.exists installed: " + r);
+        }
     }
 
     private static void hookStackTrace() {

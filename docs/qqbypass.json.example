@@ -18,7 +18,9 @@
     "device_info": true,
     "debug_detection": true,
     "runtime_monitor": true,
-    "qq950_patch": true
+    "qq950_patch": true,
+    "activity_launch": true,
+    "_activity_launch_comment": "version-agnostic 改造新增：hook android.app.Instrumentation.execStartActivity，从 Intent 层面兜底拦踢线/跳登录页。这是唯一 100% 版本无关的一层（AOSP 框架类名不变），也是 qq950_patch 里那些按 QQ 类名定位的 hook 失效时的备份。强烈建议保持开启。"
   },
 
   "fingerprint": {

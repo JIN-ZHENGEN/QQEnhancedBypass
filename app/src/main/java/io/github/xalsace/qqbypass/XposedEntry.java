@@ -8,6 +8,7 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
 import io.github.xalsace.qqbypass.config.HookConfig;
 import io.github.xalsace.qqbypass.config.ModuleConfig;
 import io.github.xalsace.qqbypass.hooks.*;
+import io.github.xalsace.qqbypass.resolve.TargetResolver;
 
 import java.util.List;
 
@@ -40,10 +41,25 @@ public class XposedEntry implements IXposedHookLoadPackage {
         log("=== QQ Enhanced Bypass v2.0 ===");
         log("Package: " + lpparam.packageName);
         log("Process: " + lpparam.processName);
-
         // Initialize configuration
         // 各既有 hook 类仍从 HookConfig 取 classLoader / lpparam，必须先初始化。
         HookConfig.init(lpparam);
+
+        // === DexKit 后台预解析（version-agnostic 改造第 4/5 项）===
+        // 必须尽早启动：DexKit 解析上百 MB 的 dex 要数秒，而各 hook 类的
+        // Tier A 只有在它 ready 后才可能命中。放在这里（HookConfig.init 之后、
+        // 任何 hook 安装之前）是为了给后台线程争取最长的解析窗口，
+        // 让同一次注入的 Tier A 就有机会生效，而不是每次都要等下一次重启。
+        //
+        // 非阻塞：本方法只起一条 MIN_PRIORITY 线程然后立刻返回，
+        // handleLoadPackage 不会被拖慢。
+        try {
+            TargetResolver.initAsync(lpparam.appInfo.sourceDir);
+        } catch (Throwable t) {
+            // 起线程失败只意味着 Tier A 全程不可用，B/C 档照常工作。
+            logError("TargetResolver init failed", t);
+        }
+
 
         // === 运行时配置（路线图第 6 项）===
         ModuleConfig cfg;

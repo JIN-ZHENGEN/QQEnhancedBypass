@@ -49,6 +49,18 @@
 -dontwarn com.bytedance.android.bytehook.**
 -dontwarn org.luckypray.dexkit.**
 
+# ---- 6b. DexKit 自身保护 ----
+# 原规则只加了 -dontwarn，但 DexKit 2.0.0 内部是 kotlin 实现，
+# 通过反射构造 matcher 链 + 读 dex 条目，R8 full mode 下这些
+# 内部类/构造器会被 shrink 或改名，运行期报
+# NoSuchMethodException / ClassNotFoundException。
+# 只 keep 它自己的包（org.luckypray.**），不动我们的代码树。
+-keep class org.luckypray.dexkit.** { *; }
+-keepclassmembers class org.luckypray.dexkit.** { *; }
+# DexKit 依赖 kotlin-reflect 的元数据
+-dontwarn kotlin.**
+-dontwarn kotlinx.**
+
 # ---- 7. 保留行号与源文件名，便于崩溃日志定位 ----
 -keepattributes SourceFile,LineNumberTable
 -renamesourcefileattribute SourceFile

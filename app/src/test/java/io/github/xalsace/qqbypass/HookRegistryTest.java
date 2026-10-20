@@ -160,12 +160,12 @@ public class HookRegistryTest {
         assertTrue(s.contains("failedIds=[bad]"));
     }
 
-    /** 默认注册表包含改造前那 7 个 hook 类，且 id 唯一。 */
+    /** 默认注册表包含全部 hook 类（含 version-agnostic 改造新增的 activity_launch），且 id 唯一。 */
     @Test
     public void defaultRegistryContainsLegacyHooks() {
         HookRegistry r = HookRegistry.createDefault();
         List<String> ids = r.ids();
-        assertEquals(7, ids.size());
+        assertEquals(8, ids.size());
         assertTrue(ids.contains("network_report"));
         assertTrue(ids.contains("root_detection"));
         assertTrue(ids.contains("xposed_detection"));
@@ -173,6 +173,7 @@ public class HookRegistryTest {
         assertTrue(ids.contains("debug_detection"));
         assertTrue(ids.contains("runtime_monitor"));
         assertTrue(ids.contains("qq950_patch"));
+        assertTrue(ids.contains("activity_launch"));
         assertEquals("id 应唯一", ids.size(), new java.util.HashSet<String>(ids).size());
         for (String id : ids) {
             assertNotNull(r.get(id));

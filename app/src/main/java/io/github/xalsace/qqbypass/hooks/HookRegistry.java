@@ -166,6 +166,13 @@ public final class HookRegistry {
         r.register(adapter("debug_detection", "Debug/Emulator Bypass", DebugDetectionHook.class));
         r.register(adapter("runtime_monitor", "Runtime Monitor Bypass", RuntimeMonitorHook.class));
         r.register(adapter("qq950_patch", "QQ 9.3.50 Detection Patch", QQ950PatchHook.class));
+        // version-agnostic 改造新增：踢线行为兜底。
+        // 放在最后注册 = 最后执行，这样它挂在 Instrumentation 上的回调
+        // 在链尾，前面的类名级 hook 先跑；两者都命中时行为一致（都是拦），
+        // 谁先谁后不影响结果，只是日志顺序不同。
+        // 它的 hook 类签名是 static void hook(LoadPackageParam)，
+        // 与 adapter 反射查找的签名一致，可直接注册，无需适配代码。
+        r.register(adapter("activity_launch", "Kick/Login Activity Backstop", ActivityLaunchHook.class));
         return r;
     }
 
