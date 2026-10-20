@@ -2,10 +2,10 @@ name: Build Release APK
 
 on:
   push:
-    branches: [qq-9.3.50-adaptation, main]
+    branches: [qq-9.3.50-adaptation, main, version-agnostic]
     tags: ['v*']
   pull_request:
-    branches: [qq-9.3.50-adaptation, main]
+    branches: [qq-9.3.50-adaptation, main, version-agnostic]
   workflow_dispatch:
 
 jobs:
@@ -166,7 +166,7 @@ jobs:
             echo "::error::XposedEntry was stripped by R8, proguard rules not effective"
             exit 1
           fi
-          for c in UnifiedHookCoordinator NetworkReportHook RootDetectionHook XposedDetectionHook DeviceInfoHook DebugDetectionHook RuntimeMonitorHook QQ950PatchHook; do
+          for c in UnifiedHookCoordinator NetworkReportHook RootDetectionHook XposedDetectionHook DeviceInfoHook DebugDetectionHook RuntimeMonitorHook QQ950PatchHook ActivityLaunchHook; do
             ok=0
             for d in $(unzip -l "$APK" | grep -o -E 'classes[0-9]*\.dex' || echo classes.dex); do
               if dexdump "$d" "io/github/xalsace/qqbypass/hooks/$c" | grep -q .; then ok=1; break; fi
