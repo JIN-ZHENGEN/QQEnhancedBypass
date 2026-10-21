@@ -320,7 +320,83 @@ public final class TargetResolver {
      * getDexMethod().getName()），取 getName() 少一跳。
      */
     private static MethodRef toRef(MethodData md) {
-        return new MethodRef(md.getClassName(), md.getName(), md.getMethodSign());
+        String sign = md.getMethodSign();
+        // DexKit getMethodSign() 在不同版本/调用下可能返回两种形式：
+        //   - dex 短码形 (...)V / (Ljava/lang/String;I)V
+        //   - 或 Java 全限定形 (...)void / (java.lang.String,int)void
+        // 而本类 methodSign(Method) 统一产出 Java 全限定形。
+        // 若直接存 dex 形，hook() 里 methodSign(m).equals(ref.paramSign)
+        // 永远不相等（例如 "()V" != "()void"），导致 hook 挂上却 hit=0 的静默失败。
+        // 因此这里把 dex 形规范成 Java 全限定形，与反射侧对齐。
+        if (sign != null && sign.indexOf(';') >= 0) {
+            sign = dexSignToJava(sign);
+        }
+        return new MethodRef(md.getClassName(), md.getName(), sign);
+    }
+
+    /**
+     * 把 DexKit 的 dex 短码方法签名规范成本模块使用的 Java 全限定形。
+     * 例：()V -> ()void；(Ljava/lang/String;I)V -> (java.lang.String,int)void
+     * 仅当输入含 ';'（dex 形标志）时调用；已是 Java 形则不动。
+     */
+    private static String dexSignToJava(String dex) {
+        int close = dex.indexOf(')');
+        if (close < 0) return dex;
+        String params = dex.substring(1, close);
+        String ret = dex.substring(close + 1);
+        StringBuilder sb = new StringBuilder("(");
+        int i = 0;
+        boolean first = true;
+        while (i < params.length()) {
+            if (!first) sb.append(',');
+            first = false;
+            char c = params.charAt(i);
+            if (c == '[') {
+                int j = i;
+                while (j < params.length() && params.charAt(j) == '[') j++;
+                String base = typeWord(params, j);
+                sb.append(base);
+                for (int k = i; k < j; k++) sb.append("[]");
+                i = j + 1;
+            } else if (c == 'L') {
+                int end = params.indexOf(';', i);
+                if (end < 0) end = params.length();
+                sb.append(params.substring(i + 1, end).replace('/', '.'));
+                i = end + 1;
+            } else {
+                sb.append(primWord(c));
+                i++;
+            }
+        }
+        sb.append(')');
+        sb.append(typeWord(ret, 0));
+        return sb.toString();
+    }
+
+    private static String typeWord(String s, int idx) {
+        if (idx >= s.length()) return s;
+        char c = s.charAt(idx);
+        if (c == 'L') {
+            int end = s.indexOf(';', idx);
+            if (end < 0) end = s.length();
+            return s.substring(idx + 1, end).replace('/', '.');
+        }
+        return primWord(c);
+    }
+
+    private static String primWord(char c) {
+        switch (c) {
+            case 'V': return "void";
+            case 'I': return "int";
+            case 'J': return "long";
+            case 'Z': return "boolean";
+            case 'B': return "byte";
+            case 'C': return "char";
+            case 'S': return "short";
+            case 'F': return "float";
+            case 'D': return "double";
+            default:  return String.valueOf(c);
+        }
     }
 
     // ------------------------------------------------------------ 安装
