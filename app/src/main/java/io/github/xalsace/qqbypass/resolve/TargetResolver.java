@@ -76,6 +76,21 @@ public final class TargetResolver {
             public void run() {
                 try {
                     long t0 = System.currentTimeMillis();
+                    // DexKit 2.0.0 的 DexKitBridge.create() 内部会懒加载
+                    // libdexkit.so；在部分 ROM / Android 版本上，若 APK 未把
+                    // so 解压到 /data/app/.../lib/（extractNativeLibs=false
+                    // 且 zip 内 so 未 4K 对齐），ART 无法 mmap，会抛
+                    // UnsatisfiedLinkError: No implementation found for
+                    // nativeInitDexKit。这里在 create() 之前显式 preload 一次，
+                    // 让失败更早暴露，并把根因明确区分「so 缺失/未解压」与
+                    // 「so 已就位但符号异常」，供 [compat] 报告。
+                    try {
+                        System.loadLibrary("dexkit");
+                    } catch (Throwable le) {
+                        Log.e(TAG, "[resolve] System.loadLibrary(\"dexkit\") failed "
+                            + "before DexKitBridge.create(); native lib not loadable "
+                            + "(check extractNativeLibs / 4K alignment): " + le, le);
+                    }
                     DexKitBridge b = DexKitBridge.create(apkPath);
                     bridge = b;
                     Log.i(TAG, "[resolve] DexKit ready in "
