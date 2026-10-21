@@ -85,7 +85,9 @@ public final class VersionCompat {
         /** 行为兜底命中（AOSP 框架类 hook）。 */
         C("C:behavior"),
         /** 三层全部未命中，彻底失效。 */
-        MISS("MISS");
+        MISS("MISS"),
+        /** 探活时 DexKit 尚未就绪（A 档尚未能判定），中性态，不计入 MISS。 */
+        PENDING("PENDING");
 
         public final String label;
 
@@ -152,13 +154,13 @@ public final class VersionCompat {
 
         // ---- B 档：类名正则探测（依赖包名前缀不变） ----
         Target.classRegex("root_detection", "File.exists su-path filter",
-            "java\\.io\\.File"),
+            "java.io.File"),
         Target.classRegex("xposed_detection", "ClassLoader.toString sanitize",
-            "java\\.lang\\.ClassLoader"),
+            "java.lang.ClassLoader"),
         Target.classRegex("runtime_monitor", "ProcessBuilder.start neutralizer",
-            "java\\.lang\\.ProcessBuilder"),
+            "java.lang.ProcessBuilder"),
         Target.classRegex("debug_detection", "TracerPid readLine spoof",
-            "java\\.io\\.BufferedReader"),
+            "java.io.BufferedReader"),
 
         // ---- A 档：DexKit 字符串常量（核心手段，抗混淆） ----
         // 踢线 action。这三个入口（NTKickProcessor / login.ntlogin.ao / UidServiceImpl）
@@ -201,18 +203,19 @@ public final class VersionCompat {
 
     /** 四档统计。供 CI / 自检报告使用。 */
     public static final class Stats {
-        public final int a, b, c, miss;
+        public final int a, b, c, miss, pending;
         public final int total;
 
-        Stats(int a, int b, int c, int miss, int total) {
+        Stats(int a, int b, int c, int miss, int pending, int total) {
             this.a = a;
             this.b = b;
             this.c = c;
             this.miss = miss;
+            this.pending = pending;
             this.total = total;
         }
 
-        /** 可直接写进 CI 的判定：MISS 必须为 0。 */
+        /** 可直接写进 CI 的判定：MISS 必须为 0（PENDING 中性态不计失效）。 */
         public boolean healthy() {
             return miss == 0;
         }
@@ -220,12 +223,12 @@ public final class VersionCompat {
         @Override
         public String toString() {
             return "A=" + a + " B=" + b + " C=" + c + " MISS=" + miss
-                + " total=" + total;
+                + " PENDING=" + pending + " total=" + total;
         }
     }
 
     public static Stats stats(List<Probe> probes) {
-        int a = 0, b = 0, c = 0, miss = 0;
+        int a = 0, b = 0, c = 0, miss = 0, pending = 0;
         for (Probe p : probes) {
             switch (p.tier) {
                 case A:
@@ -237,12 +240,15 @@ public final class VersionCompat {
                 case C:
                     c++;
                     break;
+                case PENDING:
+                    pending++;
+                    break;
                 default:
                     miss++;
                     break;
             }
         }
-        return new Stats(a, b, c, miss, probes.size());
+        return new Stats(a, b, c, miss, pending, probes.size());
     }
 
     /**
@@ -278,9 +284,13 @@ public final class VersionCompat {
 
         switch (t.tier) {
             case A:
-                // A 档：DexKit 字符串常量。未 ready 时本次探测算 MISS，
-                // 但这是「尚未解析完」而非「永久失效」。
-                hit = TargetResolver.ready() && TargetResolver.canResolve(t.strings);
+                // A 档：DexKit 字符串常量。未 ready 时本次探测算 PENDING（中性），
+                // 不计入 MISS —— 这是「尚未解析完」而非「永久失效」。
+                // 只有 ready 后仍 canResolve=false 才算真 MISS。
+                if (!TargetResolver.ready()) {
+                    return Probe.of(t.moduleId, t.target, join(t.strings), Tier.PENDING);
+                }
+                hit = TargetResolver.canResolve(t.strings);
                 evidence = join(t.strings);
                 break;
             case B:
@@ -341,6 +351,13 @@ public final class VersionCompat {
 
         Log.w(TAG, "[compat] STALE - " + s + ", these targets have no working layer:");
         for (Probe p : probes) {
+            if (p.tier == Tier.PENDING) {
+                // PENDING 是中性态：DexKit 尚未就绪，A 档未判，本轮不算失效。
+                // 等后台线程 setReady() 触发回查升级后，下一轮 scan 才会落到 A 或 MISS。
+                Log.w(TAG, "[compat]   PENDING " + p.moduleId + ":" + p.target
+                    + " (DexKit not ready yet; re-scan after DexKit ready)");
+                continue;
+            }
             if (!p.isMiss()) continue;
             Log.w(TAG, "[compat]   MISS " + p.moduleId + ":" + p.target
                 + " (tier " + p.tier.label + " evidence=" + p.evidence + ")");

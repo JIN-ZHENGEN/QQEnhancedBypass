@@ -16,6 +16,10 @@ import org.luckypray.dexkit.result.MethodData;
 
 import java.lang.reflect.Method;
 import java.util.List;
+import java.util.Set;
+import java.util.Collections;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -61,6 +65,120 @@ public final class TargetResolver {
         return initFailed;
     }
 
+    // ------------------------------------------------------------ Tier A 回查升级
+
+    /**
+     * 一个待「DexKit ready 后回查升级」的 hook 目标。
+     *
+     * 成因：{@link TieredHook#install} 在调用瞬间若 DexKit 还没 ready（后台线程
+     * 还在解析上百 MB 的 dex），A/B 两档的前置条件不满足，只能落 C 档甚至 MISS。
+     * 此时若目标本带有字符串常量（strings 非空），就把它登记到这里；等
+     * {@link #setReady} 被调用时统一回查 DexKit，命中则补挂 Tier A hook，
+     * 让「首次注入只有 C、重启才生效 A」的延迟从「跨进程重启」缩到「同进程毫秒级」。
+     *
+     * 线程安全：bridge 就绪后 {@code ready()} 即返回 true，队列只会被消费一次，
+     * 故用轻量并发容器即可，无需额外锁。
+     */
+    private static final class PendingUpgrade {
+        final String[] strings;
+        final String classRegex;
+        final String methodRegex;
+        final String className;
+        final String methodName;
+        final ClassLoader cl;
+        final XC_MethodHook cb;
+
+        PendingUpgrade(String[] strings, String classRegex, String methodRegex,
+                       String className, String methodName, ClassLoader cl, XC_MethodHook cb) {
+            this.strings = strings;
+            this.classRegex = classRegex;
+            this.methodRegex = methodRegex;
+            this.className = className;
+            this.methodName = methodName;
+            this.cl = cl;
+            this.cb = cb;
+        }
+    }
+
+    /** 等待 DexKit ready 后回查升级的 hook 目标队列。 */
+    private static final List<PendingUpgrade> PENDING =
+        new CopyOnWriteArrayList<PendingUpgrade>();
+
+    /** 已按 ref 去重挂上的 Tier A hook，避免回查重复挂载。 */
+    private static final Set<String> UPGRADED = Collections.newSetFromMap(
+        new ConcurrentHashMap<String, Boolean>());
+
+    /**
+     * 登记一个待回查升级的目标（由 {@link TieredHook} 在 MISS 且带 strings 时调用）。
+     *
+     * @return 是否成功登记（false 表示已是 MISS 不带 strings，或已 ready 无需排队）
+     */
+    public static boolean enqueueUpgrade(String[] strings, String classRegex, String methodRegex,
+                                        String className, String methodName,
+                                        ClassLoader cl, XC_MethodHook cb) {
+        if (strings == null || strings.length == 0) return false; // 无 A 档依据，升级无意义
+        if (bridge != null) {
+            // 已经 ready 了，直接尝试升级（不排队）。
+            tryUpgradeNow(strings, classRegex, methodRegex, className, methodName, cl, cb);
+            return true;
+        }
+        PENDING.add(new PendingUpgrade(strings, classRegex, methodRegex,
+            className, methodName, cl, cb));
+        return true;
+    }
+
+    /**
+     * 由 {@link #initAsync} 在 bridge 建好、把 ready() 置 true 之后调用，
+     * 触发所有待回查目标的 Tier A 升级。幂等。
+     */
+    static void setReady() {
+        if (PENDING.isEmpty()) return;
+        Log.i(TAG, "[resolve] DexKit ready -> upgrading " + PENDING.size() + " pending Tier A target(s)");
+        for (PendingUpgrade p : PENDING) {
+            tryUpgradeNow(p.strings, p.classRegex, p.methodRegex,
+                p.className, p.methodName, p.cl, p.cb);
+        }
+        PENDING.clear();
+    }
+
+    private static void tryUpgradeNow(String[] strings, String classRegex, String methodRegex,
+                                      String className, String methodName,
+                                      ClassLoader cl, XC_MethodHook cb) {
+        if (strings == null || strings.length == 0) return;
+        if (!TargetResolver.ready()) return;
+        // 去重键 = strings + 目标类方法，避免同一目标重复挂载；
+        // 同时允许「共串但 hook 不同方法」的两个调用点各自升级（如网络/踢线）。
+        StringBuilder key = new StringBuilder();
+        for (String s : strings) { key.append(s).append('|'); }
+        key.append(className).append('#').append(methodName);
+        if (UPGRADED.contains(key.toString())) return;
+        UPGRADED.add(key.toString());
+        try {
+            MethodRef ref = TargetResolver.findByStrings(strings);
+            if (ref != null) {
+                int n = TargetResolver.hook(ref, cl, cb);
+                if (n > 0) {
+                    Log.i(TAG, "[resolve] Tier A upgraded -> " + ref + " x" + n);
+                } else {
+                    Log.w(TAG, "[resolve] Tier A upgrade miss (hooked=0): " + ref);
+                }
+            } else {
+                // 字符串常量没命中 —— 可能该版本已改协议，回退到 B 档正则。
+                if (classRegex != null && methodRegex != null) {
+                    MethodRef br = TargetResolver.findByRegex(classRegex, methodRegex);
+                    if (br != null) {
+                        int n = TargetResolver.hook(br, cl, cb);
+                        if (n > 0) {
+                            Log.i(TAG, "[resolve] Tier B upgraded -> " + br + " x" + n);
+                        }
+                    }
+                }
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "[resolve] upgrade failed for " + java.util.Arrays.toString(strings) + ": " + t);
+        }
+    }
+
     /**
      * 异步初始化。幂等，可重复调用。
      *
@@ -95,6 +213,11 @@ public final class TargetResolver {
                     bridge = b;
                     Log.i(TAG, "[resolve] DexKit ready in "
                         + (System.currentTimeMillis() - t0) + "ms: " + apkPath);
+                    // 关键：bridge 就绪后立即触发「DexKit ready 后回查升级」，
+                    // 让本应在下一次函数注入才生效的 Tier A 在第时间挂上。
+                    // 这把「首次注入只有 C、重启才生效 A」的延迟从跨进程重启
+                    // 缩到同进程毫秒级（见 enqueueUpgrade / setReady）。
+                    setReady();
                 } catch (Throwable e) {
                     initFailed = true;
                     Log.e(TAG, "[resolve] DexKit init failed, Tier A disabled", e);

@@ -136,6 +136,16 @@ public final class TieredHook {
             }
         }
 
+        // ---- MISS：登记「DexKit ready 后回查升级」 ----
+        // 若本目标本带有字符串常量（A 档依据），但调用瞬间 DexKit 还没 ready
+        // （TieredHook 在 handleLoadPackage 同步执行，而 DexKit 在后台线程解析 dex，
+        // 正常要 1~4s 才就绪），则把它排队，等 TargetResolver.setReady() 时
+        // 统一回查 DexKit 补挂 Tier A/B hook，避免「首次注入只有 C、必须重启才生效 A」。
+        // 无 strings 的目标（纯 C 档，如 AOSP 框架类）升级无意义，直接 MISS。
+        if (strings != null && strings.length > 0) {
+            TargetResolver.enqueueUpgrade(strings, classRegex, methodRegex,
+                className, methodName, cl, cb);
+        }
         return new Install("MISS", 0, cLabel + "#" + mLabel);
     }
 
