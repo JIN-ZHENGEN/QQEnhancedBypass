@@ -73,7 +73,11 @@ public class XposedDetectionHook {
             new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                    if (param.args.length > 0) {
+                    // 防御性：ApplicationPackageManager 还有 getPackageInfo(VersionedPackage,int)
+                    // 这个重载，args[0] 是 VersionedPackage 而非 String。无差别强转会抛
+                    // ClassCastException 并污染调用方（pandoraex/turingcam 的探针）。
+                    // 只处理第一个参数是 String 的情形，其余放行。
+                    if (param.args.length > 0 && param.args[0] instanceof String) {
                         String packageName = (String) param.args[0];
                         if (isXposedPackage(packageName)) {
                             XposedEntry.log("Blocked PackageManager query for: " + packageName);
@@ -87,7 +91,7 @@ public class XposedDetectionHook {
             new XC_MethodHook() {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam param) throws Throwable {
-                    if (param.args.length > 0) {
+                    if (param.args.length > 0 && param.args[0] instanceof String) {
                         String packageName = (String) param.args[0];
                         if (isXposedPackage(packageName)) {
                             throw new android.content.pm.PackageManager.NameNotFoundException();

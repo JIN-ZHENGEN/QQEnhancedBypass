@@ -43,7 +43,16 @@ public class XposedEntry implements IXposedHookLoadPackage {
         log("Process: " + lpparam.processName);
         // Initialize configuration
         // 各既有 hook 类仍从 HookConfig 取 classLoader / lpparam，必须先初始化。
-        HookConfig.init(lpparam);
+        // 唯一一处 banner 之前、尚未被 try/catch 覆盖的步骤：若这里抛异常，
+        // handleLoadPackage 会整段 abort，LSPosed 只打一条无 QQEnhancedBypass
+        // TAG 的 "Exception in hooker"，表现就是「注入了但日志全无」。
+        // 显式包住并打 error，避免这种静默失败。
+        try {
+            HookConfig.init(lpparam);
+        } catch (Throwable t) {
+            logError("[fatal] HookConfig.init failed, abort injection", t);
+            return;
+        }
 
         // === DexKit 后台预解析（version-agnostic 改造第 4/5 项）===
         // 必须尽早启动：DexKit 解析上百 MB 的 dex 要数秒，而各 hook 类的
