@@ -329,13 +329,49 @@ public final class TargetResolver {
         // 永远不相等（例如 "()V" != "()void"），导致 hook 挂上却 hit=0 的静默失败。
         // 因此这里把 dex 形规范成 Java 全限定形，与反射侧对齐。
         String orig = sign;
-        if (sign != null && sign.indexOf(';') >= 0) {
+        // 注意：不能拿「含 ';'」当 dex 形判据——()V / (I)V 这类无参或纯原始类型签名
+        // 根本不含 ';'，会被误判成「已是 Java 形」而跳过转换，
+        // 最终 hook() 里 "()V" != "()void" 恒不相等，hit 永远是 0。
+        // 必须用字符集判别：整串只由 dex 类型描述符字符构成才算 dex 形。
+        if (looksDexForm(sign)) {
             sign = dexSignToJava(sign);
         }
         MethodRef r = new MethodRef(md.getClassName(), md.getName(), sign);
         Log.i(TAG, "[resolve] toRef " + md.getClassName() + "#" + md.getName()
             + " rawSign='" + orig + "' normalized='" + sign + "'");
         return r;
+    }
+
+    /**
+     * 判断签名是否为 dex 短码形，例如 {@code ()V} / {@code (I)V} / {@code (Ljava/lang/String;I)V}。
+     * 判别方式：整串只允许出现 dex 类型描述符字符（VZBCSIJFD、L、[、;、/），
+     * 一旦出现 'j'、'a'、'.'、',' 等 Java 全限定名/分隔符字符即判定为 Java 形，
+     * 例如 {@code (java.lang.String,int)void} 含 '.' 与 ','，不会被误判。
+     */
+    private static boolean looksDexForm(String s) {
+        if (s == null || s.length() < 3) return false;
+        int close = s.indexOf(')');
+        if (close != s.lastIndexOf(')')) return false;
+        if (s.charAt(0) != '(' || close < 0) return false;
+        for (int i = 1; i < close; i++) {
+            if (!isDexSignChar(s.charAt(i))) return false;
+        }
+        if (close + 1 >= s.length()) return false;
+        for (int i = close + 1; i < s.length(); i++) {
+            if (!isDexSignChar(s.charAt(i))) return false;
+        }
+        return true;
+    }
+
+    private static boolean isDexSignChar(char c) {
+        switch (c) {
+            case 'V': case 'Z': case 'B': case 'C': case 'S':
+            case 'I': case 'J': case 'F': case 'D':
+            case 'L': case '[': case ';': case '/':
+                return true;
+            default:
+                return false;
+        }
     }
 
     /**
@@ -438,7 +474,10 @@ public final class TargetResolver {
                 if (!m.getName().equals(ref.methodName)) continue;
                 if (diag == null) diag = new StringBuilder();
                 diag.append(ms).append(' ');
-                if (!ms.equals(wantSign)) continue;
+                // 双保险：即使 toRef 的规范化漏网，这里再按去空格形式比一次。
+                // DexKit 的签名可能带空格 "(int, java.lang.String)"，反射侧不带，
+                // 去掉空白后比对可吸收这类差异。
+                if (!ms.equals(wantSign) && !norm(ms).equals(norm(wantSign))) continue;
                 XposedBridge.hookMethod(m, cb);
                 hit++;
             }
@@ -459,6 +498,17 @@ public final class TargetResolver {
     /** 供 VersionCompat 探活用：只判断能不能定位到，不 hook。 */
     public static boolean canResolve(String... strings) {
         return byStrings(strings) != null;
+    }
+
+    /** 去掉签名里的所有空白，用于容错比对。 */
+    private static String norm(String s) {
+        if (s == null) return "";
+        StringBuilder sb = new StringBuilder(s.length());
+        for (int i = 0; i < s.length(); i++) {
+            char c = s.charAt(i);
+            if (c != ' ' && c != '\t' && c != '\n' && c != '\r') sb.append(c);
+        }
+        return sb.toString();
     }
 
     // ------------------------------------------------------------ 签名工具
