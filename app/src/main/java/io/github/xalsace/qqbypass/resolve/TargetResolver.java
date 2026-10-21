@@ -42,8 +42,12 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * handleLoadPackage 里同步调用（会拖慢 QQ 冷启动）。因此：
  *   - initAsync() 在后台线程建 bridge
  *   - 各 hook 类在 Tier A 处先查一次，未 ready 就跳过，走 Tier B/C
- *   - 后台线程解析完成后不主动 hook（时机太晚），只把结果缓存供下次注入使用
- * 也就是说「首次启动可能只有 B/C 生效，重启后 A 生效」—— 这是可接受的：
+ *   - 若目标带有字符串常量，同时登记进 PENDING 队列（见
+ *     {@link #enqueueUpgrade}），等 bridge 建好后由 {@link #setReady}
+ *     在同进程内回查补挂，无需等下次注入
+ * 也就是说「首次注入只有 B/C，同进程毫秒级后 A 补上」——
+ * 真机实测 DexKit ready 耗时 624ms ~ 9949ms（受设备负载影响），
+ * 补挂后即出现 {@code [resolve] Tier A upgraded} 日志。
  * A 是精确打击，B/C 是覆盖面，两者不互斥。
  */
 public final class TargetResolver {
