@@ -328,10 +328,14 @@ public final class TargetResolver {
         // 若直接存 dex 形，hook() 里 methodSign(m).equals(ref.paramSign)
         // 永远不相等（例如 "()V" != "()void"），导致 hook 挂上却 hit=0 的静默失败。
         // 因此这里把 dex 形规范成 Java 全限定形，与反射侧对齐。
+        String orig = sign;
         if (sign != null && sign.indexOf(';') >= 0) {
             sign = dexSignToJava(sign);
         }
-        return new MethodRef(md.getClassName(), md.getName(), sign);
+        MethodRef r = new MethodRef(md.getClassName(), md.getName(), sign);
+        Log.i(TAG, "[resolve] toRef " + md.getClassName() + "#" + md.getName()
+            + " rawSign='" + orig + "' normalized='" + sign + "'");
+        return r;
     }
 
     /**
@@ -428,13 +432,23 @@ public final class TargetResolver {
             Class<?> c = XposedHelpers.findClass(ref.className, cl);
             String wantSign = ref.paramSign;
             int hit = 0;
+            StringBuilder diag = null;
             for (Method m : c.getDeclaredMethods()) {
+                String ms = methodSign(m);
                 if (!m.getName().equals(ref.methodName)) continue;
-                if (!methodSign(m).equals(wantSign)) continue;
+                if (diag == null) diag = new StringBuilder();
+                diag.append(ms).append(' ');
+                if (!ms.equals(wantSign)) continue;
                 XposedBridge.hookMethod(m, cb);
                 hit++;
             }
             Log.i(TAG, "[resolve] hooked " + ref + " x" + hit);
+            if (hit == 0) {
+                // hit=0 的诊断：把该类里所有同名方法的真实反射签名打出来，
+                // 与 wantSign 直接对比，一眼看出是「签名形式不匹配」还是「方法不存在」。
+                Log.w(TAG, "[resolve] hook diag wantSign='" + wantSign + "' actual="
+                    + (diag == null ? "<no method named " + ref.methodName + ">" : diag.toString()));
+            }
             return hit;
         } catch (Throwable t) {
             Log.w(TAG, "[resolve] hook failed " + ref.className + ": " + t);
