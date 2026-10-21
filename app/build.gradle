@@ -69,6 +69,28 @@ android {
         }
     }
 
+    // ------------------------------------------------------------------
+    // Native 库打包（DexKit / ByteHook / libnative-bypass 的根因修复）
+    //
+    // 现象：模块装到 LSPosed 后，DexKitBridge.create() 抛
+    //   UnsatisfiedLinkError: couldn't find "libdexkit.so"
+    // 真因：LSPosed 用 LspModuleClassLoader 在被注入进程里加载模块 dex，
+    // 其 nativeLibraryDirectories 是 base.apk!/lib/arm64-v8a（APK 内路径）。
+    // 而 AGP 默认（useLegacyPackaging=false）会把 so 以 DEFLATE 压缩写入，
+    // 且不对齐到 4K 页——ART 无法从「压缩且未对齐的 APK 内 so」直接 mmap，
+    // 于是从模块 ClassLoader 找不到 so。
+    //
+    // 修法：useLegacyPackaging=true 让 AGP 把 so 以 STORED（不压缩）+ 4K
+    // 对齐写入 APK。Android 10+ 支持从 zip-aligned 不压缩的 APK 内 so 直接
+    // mmap 加载，LspModuleClassLoader 即可命中。这与 extractNativeLibs 无关
+    // （模块 dex 不走系统 classpath，extractNativeLibs 对模块 so 不生效）。
+    // ------------------------------------------------------------------
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging true
+        }
+    }
+
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_1_8
         targetCompatibility JavaVersion.VERSION_1_8
