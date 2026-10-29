@@ -173,6 +173,12 @@ public final class HookRegistry {
         // 它的 hook 类签名是 static void hook(LoadPackageParam)，
         // 与 adapter 反射查找的签名一致，可直接注册，无需适配代码。
         r.register(adapter("activity_launch", "Kick/Login Activity Backstop", ActivityLaunchHook.class));
+        // intchk 对抗（QQ v9.3.80 实证：内存完整性检查 + 特征码扫描体系）。
+        // 补齐前项目对该链路完全无覆盖 —— 详见 IntChkBypassHook 类注释。
+        r.register(adapter("intchk", "IntChk Memory Integrity Bypass", IntChkBypassHook.class));
+        // sec_cmd=1 重打包/签名检测对抗。与 intchk 同属 SafeCenterPushHandler 下发，
+        // 但检查对象完全不同（APK 文件本身 vs 内存字节），故拆成独立模块。
+        r.register(adapter("repack", "Repack/Signature Check Bypass", RepackCheckBypassHook.class));
         return r;
     }
 
