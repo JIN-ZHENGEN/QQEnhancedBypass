@@ -124,7 +124,23 @@ public final class TieredHook {
         if (className != null && methodName != null) {
             try {
                 Class<?> c = XposedHelpers.findClass(className, cl);
-                int before = countMethods(c, methodName);
+                // ★ 修复（2026-10-30 code review）：原先用 countMethods(c, methodName)
+                //   只数 c.getDeclaredMethods()，与 hookAllMethods 的真实口径
+                //   【不一致】——后者会 hook 继承自父类的同名方法，而
+                //   getDeclaredMethods() 不含继承成员。
+                //
+                //   后果（双向都会错）：
+                //     1) 方法只存在于父类时：declaredCount=0，但 hookAllMethods
+                //        实际挂上了 N 个 → 本应报 C，却误报 MISS，
+                //        并把它塞进 enqueueUpgrade 队列等 DexKit 补挂；
+                //        表现为日志里一堆假 MISS，让人误判保护掉了。
+                //     2) 子类覆写时：declaredCount 只数子类那份，
+                //        与 hookAllMethods 实际挂的数量对不上，报告数字失真。
+                //
+                //   正确做法：遍历整条继承链计数，与 hookAllMethods 口径对齐。
+                //   （仍保留「类在但方法不在 → 报 MISS 不报 C」的初衷，
+                //     即 hookAllMethods 静默返回 0 这个坑照旧被挡住。）
+                int before = countMethodsInHierarchy(c, methodName);
                 XposedBridge.hookAllMethods(c, methodName, cb);
                 if (before > 0) {
                     return new Install("C", before, className + "#" + methodName);
@@ -168,6 +184,50 @@ public final class TieredHook {
         return install(strings, null, null, className, methodName, cl, cb);
     }
 
+    /**
+     * 遍历整条继承链统计同名方法数，与 {@link XposedBridge#hookAllMethods} 口径对齐。
+     *
+     * hookAllMethods 内部用的是「本类 + 所有父类」的同名方法集合
+     * （Xposed 的 findMethodsExact 语义），因此这里必须同样沿
+     * getSuperclass() 向上走完，否则计数会偏小。
+     *
+     * 逐层用 getDeclaredMethods() 并自行判重：子类覆写父类方法时，
+     * 两者都被 hookAllMethods 计入（方法签名相同的覆写只算一次），
+     * 这里用「类名#方法名#参数签名」去重，与覆写语义一致。
+     */
+    private static int countMethodsInHierarchy(Class<?> c, String methodName) {
+        java.util.Set<String> seen = new java.util.HashSet<String>();
+        Class<?> cur = c;
+        // 防御：继承链异常长/循环（理论不可能，但 ROM 改过 ART 也说不准），
+        // 用深度上限兜住，避免死循环卡死 handleLoadPackage。
+        int depth = 0;
+        while (cur != null && depth < 64) {
+            try {
+                for (Method m : cur.getDeclaredMethods()) {
+                    if (!m.getName().equals(methodName)) continue;
+                    StringBuilder sig = new StringBuilder();
+                    sig.append(cur.getName()).append('#').append(methodName).append('(');
+                    for (Class<?> p : m.getParameterTypes()) {
+                        sig.append(p.getName()).append(';');
+                    }
+                    sig.append(')');
+                    seen.add(sig.toString());
+                }
+            } catch (Throwable ignored) {
+                // 某些 ART 版本对 getDeclaredMethods 可能抛（如代理类），跳过该层
+            }
+            cur = cur.getSuperclass();
+            depth++;
+        }
+        return seen.size();
+    }
+
+    /**
+     * 仅统计本类声明的方法（不含继承）。
+     *
+     * 保留它是因为语义明确、个别场景可能有用；但 Tier C 判定请一律用
+     * {@link #countMethodsInHierarchy} —— 那才是与 hookAllMethods 对齐的口径。
+     */
     private static int countMethods(Class<?> c, String methodName) {
         int n = 0;
         for (Method m : c.getDeclaredMethods()) {
