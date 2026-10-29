@@ -165,7 +165,7 @@ public class HookRegistryTest {
     public void defaultRegistryContainsLegacyHooks() {
         HookRegistry r = HookRegistry.createDefault();
         List<String> ids = r.ids();
-        assertEquals(8, ids.size());
+        assertEquals(10, ids.size());
         assertTrue(ids.contains("network_report"));
         assertTrue(ids.contains("root_detection"));
         assertTrue(ids.contains("xposed_detection"));
@@ -174,6 +174,8 @@ public class HookRegistryTest {
         assertTrue(ids.contains("runtime_monitor"));
         assertTrue(ids.contains("qq950_patch"));
         assertTrue(ids.contains("activity_launch"));
+        assertTrue(ids.contains("intchk"));
+        assertTrue(ids.contains("repack"));
         assertEquals("id 应唯一", ids.size(), new java.util.HashSet<String>(ids).size());
         for (String id : ids) {
             assertNotNull(r.get(id));
