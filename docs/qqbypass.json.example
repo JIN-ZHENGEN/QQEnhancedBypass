@@ -27,9 +27,7 @@
 
     "repack": true,
     "_repack_comment": "sec_cmd=1 重打包/签名检测对抗。拦 ctsz.m 的 SignatureReport 出口。对 LSPosed 注入型模块本分支天然不会命中（不改 APK、不重签名），但对改包/去广告版 QQ 有意义。同样不伪造 str_md5，理由是服务端持有官方 APK 摘要。",
-
-    "intchk.blockSo": false,
-    "_intchk.blockSo_comment": "阻止 libmqpintchk.so 落地。默认关：arm64 真机上该 so 本来就加载失败（APK assets/lib 下只有 x86_64 三个 so），再拦 System.load 属重复动作，还会改变「library not found」这一自然状态。等腾讯补上 arm64 so 后再考虑开启。"
+    "_intchk_blockSo_comment": "IntChkBypassHook 内部还读一个次级开关 \"intchk.blockSo\"（阻止 libmqpintchk.so 落地，默认关）。它不是注册表模块 id，本测试要求示例与 HookRegistry 严格双向对齐，故不列入上面的开关键。需要时在 modules 里自行添加即可；默认关的理由：arm64 真机上该 so 本来就加载失败，再拦属重复动作。"
   },
 
   "fingerprint": {
