@@ -20,7 +20,16 @@
     "runtime_monitor": true,
     "qq950_patch": true,
     "activity_launch": true,
-    "_activity_launch_comment": "version-agnostic 改造新增：hook android.app.Instrumentation.execStartActivity，从 Intent 层面兜底拦踢线/跳登录页。这是唯一 100% 版本无关的一层（AOSP 框架类名不变），也是 qq950_patch 里那些按 QQ 类名定位的 hook 失效时的备份。强烈建议保持开启。"
+    "_activity_launch_comment": "version-agnostic 改造新增：hook android.app.Instrumentation.execStartActivity，从 Intent 层面兜底拦踢线/跳登录页。这是唯一 100% 版本无关的一层（AOSP 框架类名不变），也是 qq950_patch 里那些按 QQ 类名定位的 hook 失效时的备份。强烈建议保持开启。",
+
+    "intchk": true,
+    "_intchk_comment": "QQ intchk 体系对抗（内存完整性检查 + 特征码扫描）。在 MQPSecUtil 源头把 memchk 返回 true、memreport 返回 null —— 伪装成「客户端正常响应了检查且结果正常」，而不是沉默不上报。注意：memreport 绝不伪造字节（服务端握有官方 so 原文，假字节一比对即自证改包）。",
+
+    "repack": true,
+    "_repack_comment": "sec_cmd=1 重打包/签名检测对抗。拦 ctsz.m 的 SignatureReport 出口。对 LSPosed 注入型模块本分支天然不会命中（不改 APK、不重签名），但对改包/去广告版 QQ 有意义。同样不伪造 str_md5，理由是服务端持有官方 APK 摘要。",
+
+    "intchk.blockSo": false,
+    "_intchk.blockSo_comment": "阻止 libmqpintchk.so 落地。默认关：arm64 真机上该 so 本来就加载失败（APK assets/lib 下只有 x86_64 三个 so），再拦 System.load 属重复动作，还会改变「library not found」这一自然状态。等腾讯补上 arm64 so 后再考虑开启。"
   },
 
   "fingerprint": {
