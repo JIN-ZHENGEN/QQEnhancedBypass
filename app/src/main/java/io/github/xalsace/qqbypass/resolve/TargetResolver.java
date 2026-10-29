@@ -58,6 +58,17 @@ public final class TargetResolver {
     private static final AtomicBoolean initing = new AtomicBoolean(false);
     private static volatile boolean initFailed = false;
 
+    /**
+     * DexKit 初始化已尝试次数（配合 {@link #MAX_ATTEMPTS} 实现有限重试）。
+     *
+     * 见 {@link #initAsync} 的修复说明：早期失败常可恢复，不能一次失败就永久放弃。
+     */
+    private static final java.util.concurrent.atomic.AtomicInteger attempts =
+        new java.util.concurrent.atomic.AtomicInteger(0);
+
+    /** DexKit 初始化最多尝试次数，超过才认定不可恢复。 */
+    private static final int MAX_ATTEMPTS = 3;
+
     private TargetResolver() {}
 
     /** 是否已就绪。供 VersionCompat 判定 A 档是否可用。 */
@@ -150,11 +161,23 @@ public final class TargetResolver {
                                       ClassLoader cl, XC_MethodHook cb) {
         if (strings == null || strings.length == 0) return;
         if (!TargetResolver.ready()) return;
-        // 去重键 = strings + 目标类方法，避免同一目标重复挂载；
-        // 同时允许「共串但 hook 不同方法」的两个调用点各自升级（如网络/踢线）。
+        // 去重键 = strings + 目标类方法 + 【回调身份】。
+        //
+        // ★ 修复（2026-10-30 code review）：原键只有 strings + className#methodName，
+        //   缺少回调身份。而 IntChkBypassHook.tryC 对同一个 SEC_UTIL 类的
+        //   memchk / memreport / antitrace 三个方法各装一个【不同回调】；
+        //   更关键的是同一 className#methodName 也可能被两个不同 hook 模块
+        //   带着不同 cb 登记（例如 intchk 与 repack 都盯上报出口）。
+        //   旧键会把后者判成重复直接 return —— 第二个回调【永远不挂】，
+        //   表现为自检里一切正常，实际静默掉一层保护。
+        //   现在用 cb 的 identityHashCode 参与建键，区分「同一目标的多个回调」。
+        //   （用 identityHashCode 而非 hashCode：XC_MethodHook 子类通常不覆写
+        //     hashCode，但即便覆写也可能碰撞，identity 语义才是「是不是同一个
+        //     回调实例」的正确判据。）
         StringBuilder key = new StringBuilder();
         for (String s : strings) { key.append(s).append('|'); }
-        key.append(className).append('#').append(methodName);
+        key.append(className).append('#').append(methodName)
+           .append('@').append(System.identityHashCode(cb));
         if (UPGRADED.contains(key.toString())) return;
         UPGRADED.add(key.toString());
         try {
@@ -186,11 +209,29 @@ public final class TargetResolver {
     /**
      * 异步初始化。幂等，可重复调用。
      *
+     * ★ 修复（2026-10-30 code review）：原实现把 initFailed 写成【一次性永久短路】：
+     *   `if (bridge != null || initFailed) return;`
+     *   一旦某次失败（例如 QQBypass-Resolver 线程被调度得太晚、或首次
+     *   System.loadLibrary("dexkit") 因 so 尚未就位而抛 UnsatisfiedLinkError），
+     *   后续所有 initAsync 调用直接 return，Tier A 在本次进程生命周期内
+     *   【永久不可用】，而注释却声称「幂等，可重复调用」——两者矛盾。
+     *
+     *   DexKit 的失败很多是可恢复的：典型场景是冷启动极早期调用时 dex/so
+     *   还没就绪，稍后重试即可成功。永久放弃等于把 90% 覆盖率的 Tier A
+     *   白白丢掉，只剩 C 档硬编码类名（正是本分支要避免的脆弱方案）。
+     *
+     *   现在改为：失败后允许重试，最多 MAX_ATTEMPTS 次，超过才真正放弃
+     *   并置 initFailed。initing 仍在 finally 复位，保证下次可重入。
+     *
      * @param apkPath QQ 的 base.apk 路径，从 lpparam.appInfo.sourceDir 取
      */
     public static void initAsync(final String apkPath) {
         if (apkPath == null || apkPath.length() == 0) return;
-        if (bridge != null || initFailed) return;
+        if (bridge != null) return;
+        if (initFailed) {
+            // 已判定为不可恢复（重试次数耗尽），不再起线程空转。
+            return;
+        }
         if (!initing.compareAndSet(false, true)) return;
 
         Thread t = new Thread(new Runnable() {
@@ -223,8 +264,17 @@ public final class TargetResolver {
                     // 缩到同进程毫秒级（见 enqueueUpgrade / setReady）。
                     setReady();
                 } catch (Throwable e) {
-                    initFailed = true;
-                    Log.e(TAG, "[resolve] DexKit init failed, Tier A disabled", e);
+                    // 只在重试次数耗尽后才置 initFailed；此前保留重试机会。
+                    // （见 initAsync 的修复说明：DexKit 早期失败常可恢复。）
+                    int used = attempts.incrementAndGet();
+                    if (used >= MAX_ATTEMPTS) {
+                        initFailed = true;
+                        Log.e(TAG, "[resolve] DexKit init failed after "
+                            + used + " attempt(s), Tier A disabled", e);
+                    } else {
+                        Log.w(TAG, "[resolve] DexKit init failed (attempt "
+                            + used + "/" + MAX_ATTEMPTS + "), will retry on next call: " + e);
+                    }
                 } finally {
                     initing.set(false);
                 }
