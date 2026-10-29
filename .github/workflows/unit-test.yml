@@ -42,6 +42,10 @@ jobs:
 
       - name: Install Android SDK
         run: |
+          set -x
+          echo "ANDROID_HOME=$ANDROID_HOME"
+          echo "ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
+          mkdir -p "$ANDROID_HOME"
           cd "$ANDROID_HOME"
           if [ ! -d cmdline-tools/latest ]; then
             curl -sSL -o cmdtools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
@@ -51,6 +55,8 @@ jobs:
           fi
           yes | cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
           cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+          # 自检：确认 SDK 真的装好了，避免后续步骤拿到空目录才报错
+          ls -l "$ANDROID_HOME/platforms" "$ANDROID_HOME/build-tools"
 
       # 单测不需要 NDK：src/test 是纯 JVM 用例（JUnit），
       # HookRegistry/HookResult/HookCounters 都刻意不依赖 Xposed/android 类型，
