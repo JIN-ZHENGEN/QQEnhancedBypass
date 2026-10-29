@@ -1,0 +1,71 @@
+name: Unit Tests
+
+# 独立单测门禁。
+#
+# 存在的理由：build-release.yml 只跑 `gradle assembleRelease`，
+# assembleRelease 【不执行】 src/test 下的任何用例。也就是说像
+# HookRegistryTest.defaultRegistryContainsLegacyHooks 这种断言
+# （默认注册表模块数、id 唯一性）在只跑 release 构建时【从未被验证过】，
+# 注册表改了模块数量而单测没同步更新，CI 照样全绿。
+#
+# 本 workflow 补上这一层：跑 testReleaseUnitTest，让注册表相关的断言
+# 真正成为门禁，而不是只在开发者本地跑过。
+on:
+  push:
+    branches: [qq-9.3.50-adaptation, main, version-agnostic]
+  pull_request:
+    branches: [qq-9.3.50-adaptation, main, version-agnostic]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    env:
+      ANDROID_HOME: /home/runner/android-sdk
+      ANDROID_SDK_ROOT: /home/runner/android-sdk
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.0'
+
+      - name: Install Android SDK
+        run: |
+          cd "$ANDROID_HOME"
+          if [ ! -d cmdline-tools/latest ]; then
+            curl -sSL -o cmdtools.zip https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+            unzip -q cmdtools.zip
+            mkdir -p cmdline-tools/latest
+            mv cmdline-tools/bin cmdline-tools/lib cmdline-tools/NOTICE.txt cmdline-tools/source.properties cmdline-tools/latest/ 2>/dev/null || true
+          fi
+          yes | cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 || true
+          cmdline-tools/latest/bin/sdkmanager "platform-tools" "platforms;android-34" "build-tools;34.0.0"
+
+      # 单测不需要 NDK：src/test 是纯 JVM 用例（JUnit），
+      # HookRegistry/HookResult/HookCounters 都刻意不依赖 Xposed/android 类型，
+      # 就是为了能在这里跑。省掉 NDK 安装让门禁快很多。
+      - name: Run unit tests
+        run: |
+          gradle testReleaseUnitTest --no-daemon --stacktrace 2>&1 | tee /tmp/gradle-test.log
+          rc=${PIPESTATUS[0]}
+          echo "gradle rc=$rc"
+          exit $rc
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-report
+          path: app/build/reports/tests/testReleaseUnitTest/
+          if-no-files-found: warn
